@@ -1,11 +1,12 @@
 import React, { useState } from "react";
-
+import { createAccount } from "../../../services/createAccount";
+import Swal from "sweetalert2";
 const initialFormState = {
   schoolName: "",
   fullName: "",
   email: "",
   password: "",
-  confirmPassword: "",
+  confirmPassword: "",  
   logo: null,
 };
 
@@ -37,7 +38,7 @@ const AccountCreateForm = () => {
     }));
   };
 
-  const handleSubmit = (event) => {
+  const handleSubmit = async (event) => {
     event.preventDefault();
 
     if (formData.password !== formData.confirmPassword) {
@@ -46,6 +47,17 @@ const AccountCreateForm = () => {
     }
 
     setPasswordError("");
+
+      const result = await createAccount(formData);
+
+      if (result.success){
+        Swal.fire("Success",result.message,"success")
+        setFormData(initialFormState);
+      }
+      else {
+        Swal.fire("Error", result.message, "error");
+      }
+
   };
 
   return (

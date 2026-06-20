@@ -1,11 +1,16 @@
 import React, { useState } from "react";
-
+import useAuth from "../../../hooks/useAuth";
+import { useNavigate } from "react-router-dom";
+import Swal from "sweetalert2"
 const initialFormState = {
   email: "",
   password: "",
 };
 
 const SignInForm = () => {
+
+  const navigate =useNavigate();
+  const { login } = useAuth();
   const [formData, setFormData] = useState(initialFormState);
 
   const handleChange = (event) => {
@@ -17,9 +22,28 @@ const SignInForm = () => {
     }));
   };
 
-  const handleSubmit = (event) => {
-    event.preventDefault();
-  };
+const handleSubmit = async (event) => {
+  event.preventDefault();
+
+  try {
+    const result = await login(formData);
+
+    if (result?.data.token) {
+      Swal.fire("Success", result.message, "success");
+      navigate("/dashboard");
+    } else {
+      Swal.fire("Error", result.message, "error");
+    }
+  } catch (error) {
+    console.log(error);
+
+    Swal.fire(
+      "Error",
+      error?.response?.data?.message || "Server is offline or login failed",
+      "error",
+    );
+  }
+};
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">

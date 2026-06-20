@@ -18,6 +18,7 @@ import AdminTasksPage from "../pages/admin/AdminTasksPage";
 import AdminLogsPage from "../pages/admin/AdminLogsPage";
 import AdminTimetablesPage from "../pages/admin/AdminTimetablesPage";
 import WorkspacePage from "../pages/user/WorkspacePage";
+import TeachingExcel from "../pages/excel/TeachingExcel";
 const AppRoute = () => {
   return (
     <BrowserRouter>
@@ -101,6 +102,7 @@ const AppRoute = () => {
             }
           />
           <Route path="/dashboard/profile" element={<ProfilePage />} />
+          <Route path="/dashboard/excel" element={<TeachingExcel/>}/>
         </Route>
         <Route element={<AdminLayout />}>
           <Route path="/admin" element={<AdminDashboard />} />
@@ -124,6 +126,7 @@ const AppRoute = () => {
           />
           <Route path="/admin/tasks" element={<AdminTasksPage />} />
           <Route path="/admin/logs" element={<AdminLogsPage />} />
+
         </Route>
       </Routes>
     </BrowserRouter>

@@ -1,5 +1,8 @@
 import React, { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import TeachingExcel from "../excel/TeachingExcel";
+import useAuth from "../../hooks/useAuth";
+import { excelImport } from "../../services/excelImport";
 
 const steps = [
   {
@@ -40,12 +43,6 @@ const daysOfWeek = [
 const morningSlots = ["08:00", "08:45", "09:30", "10:15"];
 const eveningSlots = ["13:00", "13:45", "14:30", "15:15"];
 
-const sampleRows = [
-  { className: "10A", teacher: "Mr. Smith", subject: "Mathematics" },
-  { className: "10B", teacher: "Mrs. Clark", subject: "Physics" },
-  { className: "9A", teacher: "Mr. Brown", subject: "English" },
-];
-
 const sampleGeneratedSlots = [
   {
     day: "Monday",
@@ -73,9 +70,55 @@ const sampleGeneratedSlots = [
   },
 ];
 
+// Normalize: trim, collapse multiple spaces, then Title Case each word.
+// "mathematics" / "Mathematics " / "MATHEMATICS" all become "Mathematics".
+const toTitleCase = (str) =>
+  str
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase()
+    .split(" ")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+
+// Builds { classes, teachers, subjects } (deduplicated, Title Cased)
+// from any array of rows. Pulled out as a standalone function (not a
+// hook) so it can be called directly on freshly parsed records —
+// not just on the `sampleRows` state, which only updates on the next
+// render and would otherwise be stale right after an upload.
+const buildUniqueData = (rows) => {
+  const classMap = new Map();
+  const teacherMap = new Map();
+  const subjectMap = new Map();
+
+  rows.forEach((row) => {
+    if (row.className) {
+      const clean = toTitleCase(row.className);
+      classMap.set(clean.toLowerCase(), clean);
+    }
+    if (row.teacher) {
+      const clean = toTitleCase(row.teacher);
+      teacherMap.set(clean.toLowerCase(), clean);
+    }
+    if (row.subject) {
+      const clean = toTitleCase(row.subject);
+      subjectMap.set(clean.toLowerCase(), clean);
+    }
+  });
+
+  return {
+    classes: Array.from(classMap.values()),
+    teachers: Array.from(teacherMap.values()),
+    subjects: Array.from(subjectMap.values()),
+  };
+};
+
 const TimetableWizardPage = () => {
   const [currentStep, setCurrentStep] = useState(1);
-  const [uploadedFileName, setUploadedFileName] = useState("");
+  const [sampleRows, setSampleRows] = useState([]);
+  const [uploadError, setUploadError] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState("");
   const [selectedDays, setSelectedDays] = useState([
     "Monday",
     "Tuesday",
@@ -90,6 +133,7 @@ const TimetableWizardPage = () => {
   const [periodLength, setPeriodLength] = useState("45");
   const [sessionsReady, setSessionsReady] = useState(false);
   const [generated, setGenerated] = useState(false);
+  const { schoolId, token } = useAuth();
 
   const previewSlots = useMemo(() => {
     const baseSlots = [...morningSlots, ...eveningSlots];
@@ -126,10 +170,87 @@ const TimetableWizardPage = () => {
     );
   };
 
-  const handleUpload = (event) => {
-    const selectedFile = event.target.files?.[0];
-    setUploadedFileName(selectedFile ? selectedFile.name : "");
+  const handleDataParsed = async (records) => {
+    setUploadError("");
+    setSaveError("");
+    setSampleRows(records);
+
+    // IMPORTANT: build uniqueData fresh from `records` here, not from
+    // the `uniqueData` memo below. setSampleRows() doesn't apply until
+    // the next render, so the memo (and any `uniqueData` variable read
+    // in this function) would still reflect the PREVIOUS sampleRows —
+    // empty on first upload. That's why classes/subjects were arriving
+    // empty at the backend even though records had data.
+    const freshUniqueData = buildUniqueData(records);
+
+    if (!schoolId) {
+      setSaveError("No school is linked to this account. Please log in again.");
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const result = await excelImport(
+        freshUniqueData,
+        records,
+        schoolId,
+        token,
+      );
+      console.log(result);
+    } catch (err) {
+      console.error("Excel import failed:", err);
+      setSaveError(err.message || "Something went wrong while saving.");
+    } finally {
+      setIsSaving(false);
+    }
   };
+
+  const handleUploadError = (message) => {
+    setUploadError(message);
+  };
+
+  // Used for the UI preview (cards below) and for Step 1 validation.
+  // Recomputed automatically whenever sampleRows changes (after the
+  // state update from handleDataParsed has applied).
+  const uniqueData = useMemo(() => buildUniqueData(sampleRows), [sampleRows]);
+
+  // Validation rules for each step. The Next button stays disabled until
+  // the current step's rule returns true.
+  const isCurrentStepValid = () => {
+    switch (currentStep) {
+      case 1:
+        // Step 1 succeeds only once the uploaded file produced at least
+        // one unique class, one unique teacher, and one unique subject,
+        // AND that data has been saved to the backend successfully.
+        return (
+          uniqueData.classes.length > 0 &&
+          uniqueData.teachers.length > 0 &&
+          uniqueData.subjects.length > 0 &&
+          !isSaving &&
+          !saveError
+        );
+      case 2:
+        // A single-day timetable isn't useful, so require 2+ days.
+        return selectedDays.length >= 2;
+      case 3:
+        // Both sessions need a start and end time, and they must be valid
+        // (start strictly before end).
+        return (
+          morningStart < morningEnd &&
+          eveningStart < eveningEnd &&
+          periodLength !== ""
+        );
+      case 4:
+        // Conflict-removal simulation must have been run.
+        return sessionsReady;
+      case 5:
+      default:
+        // Last step — there is no "next" to gate.
+        return true;
+    }
+  };
+
+  const currentStepValid = isCurrentStepValid();
 
   const renderProgressStep = (step) => {
     const isActive = currentStep === step.id;
@@ -176,32 +297,28 @@ const TimetableWizardPage = () => {
       case 1:
         return (
           <div className="space-y-6">
-            <div className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm shadow-slate-100/50">
-              <h3 className="text-xl font-semibold text-slate-900">
-                Upload Excel file
-              </h3>
-              <p className="mt-2 text-sm leading-6 text-slate-600">
-                Upload a spreadsheet with three columns: class, teacher, and
-                subject. This is a frontend simulation so you can later connect
-                your backend API.
-              </p>
-              <div className="mt-5 rounded-3xl border border-dashed border-sky-200 bg-sky-50 p-5">
-                <input
-                  type="file"
-                  accept=".xlsx,.xls,.csv"
-                  onChange={handleUpload}
-                  className="block w-full cursor-pointer text-sm text-slate-700 file:mr-4 file:rounded-2xl file:border-0 file:bg-sky-500 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-white hover:file:bg-sky-600"
-                />
-                <p className="mt-3 text-xs text-slate-500">
-                  Required columns: class, teacher, subject.
-                </p>
-                {uploadedFileName ? (
-                  <p className="mt-2 text-sm font-medium text-sky-700">
-                    Selected file: {uploadedFileName}
-                  </p>
-                ) : null}
+            <TeachingExcel
+              onDataParsed={handleDataParsed}
+              onError={handleUploadError}
+            />
+
+            {uploadError ? (
+              <div className="rounded-3xl border border-red-100 bg-red-50 p-4 text-sm font-medium text-red-600">
+                {uploadError}
               </div>
-            </div>
+            ) : null}
+
+            {isSaving ? (
+              <div className="rounded-3xl border border-sky-100 bg-sky-50 p-4 text-sm font-medium text-sky-700">
+                Saving uploaded data to the server...
+              </div>
+            ) : null}
+
+            {saveError ? (
+              <div className="rounded-3xl border border-red-100 bg-red-50 p-4 text-sm font-medium text-red-600">
+                {saveError}
+              </div>
+            ) : null}
 
             <div className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm shadow-slate-100/50">
               <h4 className="text-lg font-semibold text-slate-900">
@@ -214,9 +331,9 @@ const TimetableWizardPage = () => {
                   <span>Subject</span>
                 </div>
                 <div className="divide-y divide-slate-100 bg-white">
-                  {sampleRows.map((row) => (
+                  {sampleRows.map((row, index) => (
                     <div
-                      key={`${row.className}-${row.subject}`}
+                      key={`${row.className}-${row.subject}-${index}`}
                       className="grid grid-cols-3 gap-4 px-5 py-4 text-sm text-slate-700"
                     >
                       <span className="font-medium text-slate-900">
@@ -226,6 +343,63 @@ const TimetableWizardPage = () => {
                       <span>{row.subject}</span>
                     </div>
                   ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-3xl border border-slate-100 bg-white p-6 shadow-sm shadow-slate-100/50">
+              <h4 className="text-lg font-semibold text-slate-900">
+                Unique values ready for backend
+              </h4>
+              <p className="mt-2 text-sm leading-6 text-slate-600">
+                Duplicates removed. This is the data shape that will be sent to
+                the backend later.
+              </p>
+              <div className="mt-5 grid gap-4 sm:grid-cols-3">
+                <div className="rounded-2xl bg-sky-50 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.22em] text-sky-500">
+                    Classes ({uniqueData.classes.length})
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {uniqueData.classes.map((value) => (
+                      <span
+                        key={value}
+                        className="rounded-full bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm"
+                      >
+                        {value}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <div className="rounded-2xl bg-sky-50 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.22em] text-sky-500">
+                    Teachers ({uniqueData.teachers.length})
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {uniqueData.teachers.map((value) => (
+                      <span
+                        key={value}
+                        className="rounded-full bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm"
+                      >
+                        {value}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+                <div className="rounded-2xl bg-sky-50 p-4">
+                  <p className="text-xs font-semibold uppercase tracking-[0.22em] text-sky-500">
+                    Subjects ({uniqueData.subjects.length})
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {uniqueData.subjects.map((value) => (
+                      <span
+                        key={value}
+                        className="rounded-full bg-white px-3 py-1.5 text-xs font-medium text-slate-700 shadow-sm"
+                      >
+                        {value}
+                      </span>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
@@ -516,23 +690,40 @@ const TimetableWizardPage = () => {
               Previous step
             </button>
 
-            <div className="flex flex-col gap-3 sm:flex-row">
-              {currentStep < steps.length ? (
+            <div className="flex flex-col items-end gap-2">
+              {!currentStepValid && currentStep < steps.length ? (
+                <p className="text-xs font-medium text-red-500">
+                  {currentStep === 1 &&
+                    (isSaving
+                      ? "Saving to the server, please wait..."
+                      : saveError
+                        ? "Fix the save error above before continuing."
+                        : "Upload a valid file with at least one class, teacher, and subject.")}
+                  {currentStep === 2 && "Select at least 2 days."}
+                  {currentStep === 3 &&
+                    "Make sure start times are before end times."}
+                  {currentStep === 4 && "Run the conflict removal simulation."}
+                </p>
+              ) : null}
+              <div className="flex flex-col gap-3 sm:flex-row">
+                {currentStep < steps.length ? (
+                  <button
+                    type="button"
+                    onClick={goNext}
+                    disabled={!currentStepValid}
+                    className="rounded-2xl bg-sky-500 px-5 py-3 text-sm font-semibold text-white transition hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-sky-500"
+                  >
+                    Next step
+                  </button>
+                ) : null}
                 <button
                   type="button"
-                  onClick={goNext}
-                  className="rounded-2xl bg-sky-500 px-5 py-3 text-sm font-semibold text-white transition hover:bg-sky-600"
+                  onClick={() => setGenerated(true)}
+                  className="rounded-2xl border border-sky-200 bg-white px-5 py-3 text-sm font-semibold text-sky-700 transition hover:bg-sky-50"
                 >
-                  Next step
+                  Preview only
                 </button>
-              ) : null}
-              <button
-                type="button"
-                onClick={() => setGenerated(true)}
-                className="rounded-2xl border border-sky-200 bg-white px-5 py-3 text-sm font-semibold text-sky-700 transition hover:bg-sky-50"
-              >
-                Preview only
-              </button>
+              </div>
             </div>
           </div>
         </div>

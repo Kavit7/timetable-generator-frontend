@@ -12,11 +12,11 @@ const navItems = [
 ];
 
 const Sidebar = () => {
-  const { setUser } = useAuth();
+  const { logout } = useAuth();
   const navigate = useNavigate();
 
-  const handleLogout = () => {
-    setUser(null);
+  const handleLogout = async () => {
+    await logout()
     navigate("/sign-in");
   };
 
