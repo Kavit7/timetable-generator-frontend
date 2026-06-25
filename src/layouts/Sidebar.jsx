@@ -1,7 +1,7 @@
 import React from "react";
 import { NavLink, useNavigate } from "react-router-dom";
 import useAuth from "../hooks/useAuth";
-
+import Swal from "sweetalert2"
 const navItems = [
   { label: "Dashboard", to: "/dashboard" },
   { label: "Create Timetable", to: "/dashboard/timetable" },
@@ -18,6 +18,7 @@ const Sidebar = () => {
   const handleLogout = async () => {
     await logout()
     navigate("/sign-in");
+    Swal.fire("success","LoggedOut Successfully","success")
   };
 
   return (
